@@ -50,6 +50,7 @@ interface Cluster {
   nodes: NodeMetric[];
   sendWebhook: (gateway?: WebhookEvent["gateway"]) => void;
   replayEvent: (id: string) => void;
+  clearLastEvent: () => void;
 }
 
 const Ctx = createContext<Cluster | undefined>(undefined);
@@ -147,6 +148,10 @@ export function ClusterProvider({ children }: { children: React.ReactNode }) {
     setEvents(prev => prev.map(e => e.id === id ? { ...e, status: "recovered", retries: e.retries + 1, latencyMs: Math.floor(Math.random() * 80 + 20) } : e));
   }, []);
 
+  const clearLastEvent = useCallback(() => {
+    setLastEvent(null);
+  }, []);
+
   // Main simulation loop — skipped entirely when tps === 0
   useEffect(() => {
     if (tps === 0) return;
@@ -180,7 +185,7 @@ export function ClusterProvider({ children }: { children: React.ReactNode }) {
   }, [tps, faultMode, aiMode, inferenceMode]);
 
   return (
-    <Ctx.Provider value={{ tps, setTps, faultMode, setFaultMode, aiMode, setAiMode, inferenceMode, totalWebhooks, recovered, savings, lastEvent, events, nodes, sendWebhook, replayEvent }}>
+    <Ctx.Provider value={{ tps, setTps, faultMode, setFaultMode, aiMode, setAiMode, inferenceMode, totalWebhooks, recovered, savings, lastEvent, events, nodes, sendWebhook, replayEvent, clearLastEvent }}>
       {children}
     </Ctx.Provider>
   );
