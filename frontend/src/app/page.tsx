@@ -241,7 +241,7 @@ const levelColor = { info: "var(--blue)", warn: "var(--amber)", error: "var(--re
 
 // ─── Main page ─────────────────────────────────────────────────────────────────
 export default function MissionControl() {
-  const { tps, totalWebhooks, recovered, savings, faultMode, inferenceMode, sendWebhook, lastEvent } = useCluster();
+  const { tps, totalWebhooks, recovered, savings, faultMode, inferenceMode, sendWebhook, lastEvent, clearLastEvent } = useCluster();
   const [chart, setChart] = useState([{ t: 0, tps: 0, recovered: 0 }]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logFilter, setLogFilter] = useState("ALL");
@@ -289,6 +289,11 @@ export default function MissionControl() {
       setShowToast(true);
     }
   }, [lastEvent]);
+
+  const handleDismissToast = () => {
+    setShowToast(false);
+    clearLastEvent();
+  };
 
   const TAGS = ["ALL", "XGBOOST", "LSTM", "KEDA", "GATEWAY"];
   const filteredLogs = logFilter === "ALL" ? logs : logs.filter(l => l.tag === logFilter);
@@ -412,7 +417,7 @@ export default function MissionControl() {
           <WebhookToast
             key={toastEvent.id}
             event={toastEvent}
-            onDismiss={() => setShowToast(false)}
+            onDismiss={handleDismissToast}
             onClick={() => setModalEvent(toastEvent)}
           />
         )}
