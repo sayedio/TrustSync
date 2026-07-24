@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: trustsync
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://user:password@db:5432/trustsync
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+
+  celery_worker:
+    build: ./backend
+    command: celery -A tasks worker --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://user:password@db:5432/trustsync
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+      - backend
+
+  simulators:
+    build: ./simulators
+    ports:
+      - "4000:4000"
+    environment:
+      - AI_SERVICE_URL=http://backend:8000
+    depends_on:
+      - backend
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      # Use localhost because the browser fetches this directly from the client side
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
