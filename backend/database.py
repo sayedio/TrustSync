@@ -3,15 +3,20 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 import datetime
 import os
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@db:5432/trustsync")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 
-# In case running locally without docker, fallback to sqlite
-if not os.getenv("DATABASE_URL"):
+# Fallback to local SQLite if no DATABASE_URL is set
+if not DATABASE_URL:
     DATABASE_URL = "sqlite:///./trustsync.db"
+
+# Handle legacy 'postgres://' scheme from cloud databases (Supabase, Heroku, etc.)
+# SQLAlchemy 1.4+ / 2.0 requires 'postgresql://' instead of 'postgres://' (fixes e3q8 error)
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # Create engine (sqlite requires check_same_thread=False)
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -55,11 +60,20 @@ class MerchantBudget(Base):
     paused_at = Column(DateTime, nullable=True)
 
 def init_db():
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("Database tables initialized successfully.")
+    except Exception as e:
+        print(f"Warning: Primary DB initialization skipped due to connection error: {e}")
 
 def get_db():
-    db = SessionLocal()
+    db = None
     try:
+        db = SessionLocal()
         yield db
+    except Exception as e:
+        print(f"Database connection error during request: {e}")
+        raise e
     finally:
-        db.close()
+        if db:
+            db.close()

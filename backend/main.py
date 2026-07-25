@@ -13,7 +13,10 @@ from sqlalchemy.orm import Session
 from tasks import process_webhook_retry
 from database import init_db, get_db, WebhookTransaction, SystemLog, IdempotencyKey, MerchantBudget
 
-init_db()
+try:
+    init_db()
+except Exception as err:
+    print(f"Warning: init_db startup skipped: {err}")
 
 app = FastAPI(title="TrustSync.AI - AI Webhook Recovery")
 

@@ -2,8 +2,13 @@ import os
 import httpx
 from celery import Celery, Task  # type: ignore
 
-# Redis broker URL (update if using a different port or host)
+import ssl
+
+# Redis broker URL (supports standard redis:// and Upstash SSL rediss://)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+# Enable SSL for rediss:// scheme (Upstash serverless Redis)
+ssl_options = {"ssl_cert_reqs": ssl.CERT_NONE} if REDIS_URL.startswith("rediss://") else None
 
 celery_app = Celery("tasks", broker=REDIS_URL, backend=REDIS_URL)
 
@@ -13,6 +18,8 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    broker_use_ssl=ssl_options,
+    redis_backend_use_ssl=ssl_options,
 )
 
 @celery_app.task(bind=True, max_retries=3)
