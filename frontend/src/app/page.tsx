@@ -241,7 +241,7 @@ const levelColor = { info: "var(--blue)", warn: "var(--amber)", error: "var(--re
 
 // ─── Main page ─────────────────────────────────────────────────────────────────
 export default function MissionControl() {
-  const { tps, totalWebhooks, recovered, savings, faultMode, inferenceMode, sendWebhook, lastEvent, clearLastEvent } = useCluster();
+  const { tps, totalWebhooks, recovered, savings, faultMode, inferenceMode, sendWebhook, lastEvent, clearLastEvent, markEventShown, dismissedIds } = useCluster();
   const [chart, setChart] = useState([{ t: 0, tps: 0, recovered: 0 }]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logFilter, setLogFilter] = useState("ALL");
@@ -281,16 +281,20 @@ export default function MissionControl() {
   // Auto-scroll logs
   useEffect(() => { logsRef.current?.scrollTo({ top: logsRef.current.scrollHeight, behavior: "smooth" }); }, [logs]);
 
-  // Show toast when lastEvent changes
+  // Show toast when lastEvent changes (only if never dismissed before)
   useEffect(() => {
-    if (lastEvent && lastEvent !== prevLastEvent.current) {
+    if (lastEvent && !dismissedIds.has(lastEvent.id) && lastEvent !== prevLastEvent.current) {
       prevLastEvent.current = lastEvent;
+      markEventShown(lastEvent.id);
       setToastEvent(lastEvent);
       setShowToast(true);
     }
-  }, [lastEvent]);
+  }, [lastEvent, dismissedIds, markEventShown]);
 
   const handleDismissToast = () => {
+    if (toastEvent) {
+      markEventShown(toastEvent.id);
+    }
     setShowToast(false);
     clearLastEvent();
   };

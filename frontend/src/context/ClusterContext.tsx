@@ -51,6 +51,8 @@ interface Cluster {
   sendWebhook: (gateway?: WebhookEvent["gateway"]) => void;
   replayEvent: (id: string) => void;
   clearLastEvent: () => void;
+  markEventShown: (id: string) => void;
+  dismissedIds: Set<string>;
 }
 
 const Ctx = createContext<Cluster | undefined>(undefined);
@@ -125,6 +127,7 @@ export function ClusterProvider({ children }: { children: React.ReactNode }) {
   const [recovered, setRecovered] = useState(4_218);
   const [events, setEvents] = useState<WebhookEvent[]>(SEED_EVENTS);
   const [lastEvent, setLastEvent] = useState<WebhookEvent | null>(null);
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => new Set());
   const tickRef = useRef(0);
 
   const inferenceMode: InferenceMode = tps > 500 ? "gpu" : "cpu";
@@ -150,6 +153,14 @@ export function ClusterProvider({ children }: { children: React.ReactNode }) {
 
   const clearLastEvent = useCallback(() => {
     setLastEvent(null);
+  }, []);
+
+  const markEventShown = useCallback((id: string) => {
+    setDismissedIds(prev => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
   }, []);
 
   // Main simulation loop — skipped entirely when tps === 0
@@ -185,7 +196,7 @@ export function ClusterProvider({ children }: { children: React.ReactNode }) {
   }, [tps, faultMode, aiMode, inferenceMode]);
 
   return (
-    <Ctx.Provider value={{ tps, setTps, faultMode, setFaultMode, aiMode, setAiMode, inferenceMode, totalWebhooks, recovered, savings, lastEvent, events, nodes, sendWebhook, replayEvent, clearLastEvent }}>
+    <Ctx.Provider value={{ tps, setTps, faultMode, setFaultMode, aiMode, setAiMode, inferenceMode, totalWebhooks, recovered, savings, lastEvent, events, nodes, sendWebhook, replayEvent, clearLastEvent, markEventShown, dismissedIds }}>
       {children}
     </Ctx.Provider>
   );
