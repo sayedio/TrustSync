@@ -10,6 +10,7 @@ const NAV = [
   { href: "/vault",        icon: "⊡", label: "Recovery Vault",    sub: "Queue & Replay" },
   { href: "/finops",       icon: "◎", label: "FinOps",            sub: "Cost Optimization" },
   { href: "/lab",          icon: "⊘", label: "Chaos Lab",         sub: "Fault Injection" },
+  { href: "/guard",        icon: "🛡", label: "Duplicate Guard",   sub: "Budget & Matching" },
 ];
 
 export default function Sidebar() {

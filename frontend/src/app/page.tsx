@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
 import { useCluster, WebhookEvent } from "@/context/ClusterContext";
+import Link from "next/link";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { motion, AnimatePresence } from "framer-motion";
 import SimulationFlow from "@/components/SimulationFlow";
@@ -241,7 +242,7 @@ const levelColor = { info: "var(--blue)", warn: "var(--amber)", error: "var(--re
 
 // ─── Main page ─────────────────────────────────────────────────────────────────
 export default function MissionControl() {
-  const { tps, totalWebhooks, recovered, savings, faultMode, inferenceMode, sendWebhook, lastEvent, clearLastEvent, markEventShown, dismissedIds } = useCluster();
+  const { tps, totalWebhooks, recovered, savings, faultMode, inferenceMode, sendWebhook, lastEvent, clearLastEvent, markEventShown, dismissedIds, duplicatesBlocked, pausedMerchants } = useCluster();
   const [chart, setChart] = useState([{ t: 0, tps: 0, recovered: 0 }]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logFilter, setLogFilter] = useState("ALL");
@@ -321,11 +322,25 @@ export default function MissionControl() {
       </div>
 
       {/* KPIs */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 14 }}>
         <KPI label="Traffic Load" value={tps} sub={tps === 0 ? "Idle — set TPS in Chaos Lab" : "Transactions / second"} accent="var(--blue)" />
         <KPI label="Total Webhooks" value={totalWebhooks} sub="Since cluster start" accent="var(--purple)" />
         <KPI label="AI Recovered" value={recovered} sub="Prevented lost revenue" accent="var(--amber)" />
         <KPI label="Saved Revenue" value={savings} sub="Zero lost transactions" accent="var(--green)" prefix="$" decimals={2} />
+        <Link href="/guard" style={{ textDecoration: "none" }}>
+          <div className="card" style={{ borderColor: "#ef444422", cursor: "pointer", height: "100%", display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 10 }}>🚫 Duplicates Blocked</div>
+            <div style={{ fontSize: 30, fontWeight: 800, color: "#ef4444", letterSpacing: "-0.03em", lineHeight: 1, marginBottom: 6, fontFamily: "JetBrains Mono, monospace" }}>{duplicatesBlocked}</div>
+            <div style={{ fontSize: 11, color: "var(--muted)" }}>Idempotency guard active</div>
+          </div>
+        </Link>
+        <Link href="/guard" style={{ textDecoration: "none" }}>
+          <div className="card" style={{ borderColor: pausedMerchants.length > 0 ? "#f59e0b22" : "transparent", cursor: "pointer", height: "100%", display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 10 }}>⏸ Merchants Paused</div>
+            <div style={{ fontSize: 30, fontWeight: 800, color: pausedMerchants.length > 0 ? "#f59e0b" : "var(--white)", letterSpacing: "-0.03em", lineHeight: 1, marginBottom: 6, fontFamily: "JetBrains Mono, monospace" }}>{pausedMerchants.length}</div>
+            <div style={{ fontSize: 11, color: "var(--muted)" }}>Retry budget enforced</div>
+          </div>
+        </Link>
       </div>
 
       {/* Pipeline + Chart */}

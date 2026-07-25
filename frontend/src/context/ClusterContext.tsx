@@ -18,6 +18,8 @@ export interface WebhookEvent {
   retries: number;
   ts: Date;
   payload: Record<string, unknown>;
+  idempotencyKey?: string;
+  isDuplicate?: boolean;
 }
 
 export interface NodeMetric {
@@ -33,6 +35,25 @@ export interface NodeMetric {
 }
 
 export type AiMode = "with" | "without";
+
+// ─── Guard types ──────────────────────────────────────────────────────────────
+export interface MatchEntry {
+  id: string;
+  gateway: string;
+  amount: number;
+  currency: string;
+  idempotencyKey: string;
+  deliveredAt: Date;
+  confirmed: boolean; // true = unique delivery verified
+  isDuplicate: boolean;
+}
+
+export interface BudgetEntry {
+  gateway: string;
+  count: number;
+  limit: number;
+  paused: boolean;
+}
 
 interface Cluster {
   tps: number;
@@ -53,6 +74,14 @@ interface Cluster {
   clearLastEvent: () => void;
   markEventShown: (id: string) => void;
   dismissedIds: Set<string>;
+  // Guard
+  duplicatesBlocked: number;
+  pausedMerchants: string[];
+  matchingReport: MatchEntry[];
+  retryBudgets: BudgetEntry[];
+  triggerDuplicate: (gateway?: WebhookEvent["gateway"]) => void;
+  triggerRetryStorm: (gateway?: WebhookEvent["gateway"]) => void;
+  unblockMerchant: (gateway: string) => void;
 }
 
 const Ctx = createContext<Cluster | undefined>(undefined);
@@ -85,6 +114,7 @@ function makeEvent(faultMode: FaultMode, idx: number, gateway?: WebhookEvent["ga
 
   const amount = Math.floor(Math.random() * 800) + 20;
   const id = `wh_${Math.random().toString(36).slice(2, 9)}`;
+  const idempotencyKey = `idem_${id}`;
 
   return {
     id,
@@ -97,6 +127,8 @@ function makeEvent(faultMode: FaultMode, idx: number, gateway?: WebhookEvent["ga
     latencyMs,
     retries: isAnomaly && aiMode === "with" ? Math.floor(Math.random() * 3) + 1 : 0,
     ts: new Date(),
+    idempotencyKey,
+    isDuplicate: false,
     payload: {
       event: evtName,
       gateway: gw,
@@ -107,19 +139,20 @@ function makeEvent(faultMode: FaultMode, idx: number, gateway?: WebhookEvent["ga
       ai_protection_active: aiMode === "with",
       xgboost_score: anomalyScore.toFixed(3),
       lstm_predicted_recovery_ms: isAnomaly && aiMode === "with" ? "450" : "n/a",
+      idempotency_key: idempotencyKey,
     },
   };
 }
 
 const SEED_EVENTS: WebhookEvent[] = [
-  { id: "wh_abc1234", gateway: "SSLCommerz", event: "payment_intent.succeeded", amount: 145, currency: "BDT", status: "recovered", anomalyScore: 0.941, latencyMs: 512, retries: 2, ts: new Date(Date.now() - 120000), payload: { event: "payment_intent.succeeded", ai_action: "smart_retry_recovered", lstm_predicted_recovery_ms: "450" } },
-  { id: "wh_def5678", gateway: "bKash", event: "checkout.session.completed", amount: 85, currency: "BDT", status: "queued", anomalyScore: 0.876, latencyMs: 730, retries: 1, ts: new Date(Date.now() - 60000), payload: { event: "checkout.session.completed", ai_action: "intercepted_queued_for_retry" } },
-  { id: "wh_ghi9012", gateway: "Stripe", event: "charge.captured", amount: 320, currency: "USD", status: "delivered", anomalyScore: 0.031, latencyMs: 14, retries: 0, ts: new Date(Date.now() - 30000), payload: { event: "charge.captured", ai_action: "direct_delivery" } },
-  { id: "wh_jkl3456", gateway: "bKash", event: "customer.subscription.updated", amount: 25, currency: "BDT", status: "recovered", anomalyScore: 0.912, latencyMs: 390, retries: 1, ts: new Date(Date.now() - 240000), payload: { event: "customer.subscription.updated", ai_action: "smart_retry_recovered" } },
+  { id: "wh_abc1234", gateway: "SSLCommerz", event: "payment_intent.succeeded", amount: 145, currency: "BDT", status: "recovered", anomalyScore: 0.941, latencyMs: 512, retries: 2, ts: new Date(Date.now() - 120000), idempotencyKey: "idem_abc1234", isDuplicate: false, payload: { event: "payment_intent.succeeded", ai_action: "smart_retry_recovered", lstm_predicted_recovery_ms: "450", idempotency_key: "idem_abc1234" } },
+  { id: "wh_def5678", gateway: "bKash", event: "checkout.session.completed", amount: 85, currency: "BDT", status: "queued", anomalyScore: 0.876, latencyMs: 730, retries: 1, ts: new Date(Date.now() - 60000), idempotencyKey: "idem_def5678", isDuplicate: false, payload: { event: "checkout.session.completed", ai_action: "intercepted_queued_for_retry", idempotency_key: "idem_def5678" } },
+  { id: "wh_ghi9012", gateway: "Stripe", event: "charge.captured", amount: 320, currency: "USD", status: "delivered", anomalyScore: 0.031, latencyMs: 14, retries: 0, ts: new Date(Date.now() - 30000), idempotencyKey: "idem_ghi9012", isDuplicate: false, payload: { event: "charge.captured", ai_action: "direct_delivery", idempotency_key: "idem_ghi9012" } },
+  { id: "wh_jkl3456", gateway: "bKash", event: "customer.subscription.updated", amount: 25, currency: "BDT", status: "recovered", anomalyScore: 0.912, latencyMs: 390, retries: 1, ts: new Date(Date.now() - 240000), idempotencyKey: "idem_jkl3456", isDuplicate: false, payload: { event: "customer.subscription.updated", ai_action: "smart_retry_recovered", idempotency_key: "idem_jkl3456" } },
 ];
 
 export function ClusterProvider({ children }: { children: React.ReactNode }) {
-  const [tps, setTps] = useState(0); // starts at 0 — no traffic until user sets it
+  const [tps, setTps] = useState(0);
   const [faultMode, setFaultMode] = useState<FaultMode>("none");
   const [aiMode, setAiMode] = useState<AiMode>("with");
   const [savings, setSavings] = useState(14523.48);
@@ -129,6 +162,22 @@ export function ClusterProvider({ children }: { children: React.ReactNode }) {
   const [lastEvent, setLastEvent] = useState<WebhookEvent | null>(null);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => new Set());
   const tickRef = useRef(0);
+
+  // ─── Guard state ────────────────────────────────────────────────────────────
+  const seenKeysRef = useRef<Set<string>>(new Set());
+  const [duplicatesBlocked, setDuplicatesBlocked] = useState(0);
+  const [pausedMerchants, setPausedMerchants] = useState<string[]>([]);
+  const [matchingReport, setMatchingReport] = useState<MatchEntry[]>([
+    { id: "wh_ghi9012", gateway: "Stripe", amount: 320, currency: "USD", idempotencyKey: "idem_ghi9012", deliveredAt: new Date(Date.now() - 30000), confirmed: true, isDuplicate: false },
+    { id: "wh_abc1234", gateway: "SSLCommerz", amount: 145, currency: "BDT", idempotencyKey: "idem_abc1234", deliveredAt: new Date(Date.now() - 120000), confirmed: true, isDuplicate: false },
+    { id: "wh_jkl3456", gateway: "bKash", amount: 25, currency: "BDT", idempotencyKey: "idem_jkl3456", deliveredAt: new Date(Date.now() - 240000), confirmed: true, isDuplicate: false },
+  ]);
+  const [retryBudgets, setRetryBudgets] = useState<BudgetEntry[]>([
+    { gateway: "Stripe", count: 0, limit: 5, paused: false },
+    { gateway: "bKash", count: 0, limit: 5, paused: false },
+    { gateway: "SSLCommerz", count: 0, limit: 5, paused: false },
+  ]);
+  const retryCountsRef = useRef<Record<string, number>>({ Stripe: 0, bKash: 0, SSLCommerz: 0 });
 
   const inferenceMode: InferenceMode = tps > 500 ? "gpu" : "cpu";
 
@@ -141,11 +190,118 @@ export function ClusterProvider({ children }: { children: React.ReactNode }) {
 
   const sendWebhook = useCallback((gateway: WebhookEvent["gateway"] = "Stripe") => {
     const ev = makeEvent(faultMode, tickRef.current, gateway, aiMode);
+    const key = ev.idempotencyKey!;
+
+    // ── Duplicate Guard ────────────────────────────────────────────────────
+    if (seenKeysRef.current.has(key)) {
+      // Duplicate detected — log it but don't increment counters
+      const dupEv: WebhookEvent = { ...ev, id: `wh_dup_${Math.random().toString(36).slice(2,7)}`, isDuplicate: true, status: "failed" };
+      setEvents(prev => [dupEv, ...prev.slice(0, 49)]);
+      setDuplicatesBlocked(p => p + 1);
+      return;
+    }
+    seenKeysRef.current.add(key);
+
+    // ── Retry Budget ───────────────────────────────────────────────────────
+    const isAnomaly = faultMode !== "none";
+    if (isAnomaly) {
+      const currentCount = retryCountsRef.current[gateway] ?? 0;
+      const newCount = currentCount + 1;
+      retryCountsRef.current[gateway] = newCount;
+      const LIMIT = 5;
+      const willPause = newCount >= LIMIT;
+
+      setRetryBudgets(prev => prev.map(b =>
+        b.gateway === gateway
+          ? { ...b, count: newCount, paused: willPause }
+          : b
+      ));
+
+      if (willPause && !pausedMerchants.includes(gateway)) {
+        setPausedMerchants(prev => [...prev, gateway]);
+      }
+    }
+
     setEvents(prev => [ev, ...prev.slice(0, 49)]);
     setLastEvent(ev);
     setTotalWebhooks(p => p + 1);
     if (ev.status === "recovered" || ev.status === "queued") setRecovered(p => p + 1);
-  }, [faultMode, aiMode]);
+
+    // ── Add to matching report if delivered ───────────────────────────────
+    if (ev.status === "delivered" || ev.status === "recovered") {
+      const entry: MatchEntry = {
+        id: ev.id, gateway: ev.gateway, amount: ev.amount, currency: ev.currency,
+        idempotencyKey: key, deliveredAt: new Date(), confirmed: true, isDuplicate: false,
+      };
+      setMatchingReport(prev => [entry, ...prev.slice(0, 49)]);
+    }
+  }, [faultMode, aiMode, pausedMerchants]);
+
+  // ─── Guard actions ─────────────────────────────────────────────────────────
+  const triggerDuplicate = useCallback((gateway: WebhookEvent["gateway"] = "Stripe") => {
+    // Send a real event first, then immediately resend its key
+    const ev = makeEvent("none", tickRef.current++, gateway, aiMode);
+    const key = ev.idempotencyKey!;
+    seenKeysRef.current.add(key);
+
+    // Original
+    setEvents(prev => [ev, ...prev.slice(0, 49)]);
+    setTotalWebhooks(p => p + 1);
+    const entry: MatchEntry = {
+      id: ev.id, gateway: ev.gateway, amount: ev.amount, currency: ev.currency,
+      idempotencyKey: key, deliveredAt: new Date(), confirmed: true, isDuplicate: false,
+    };
+    setMatchingReport(prev => [entry, ...prev.slice(0, 49)]);
+
+    // Duplicate — immediately after
+    setTimeout(() => {
+      const dupEv: WebhookEvent = {
+        ...makeEvent("none", tickRef.current++, gateway, aiMode),
+        id: `wh_dup_${Math.random().toString(36).slice(2,7)}`,
+        idempotencyKey: key,
+        isDuplicate: true,
+        status: "failed",
+      };
+      setEvents(prev => [dupEv, ...prev.slice(0, 49)]);
+      setDuplicatesBlocked(p => p + 1);
+    }, 600);
+  }, [aiMode]);
+
+  const triggerRetryStorm = useCallback((gateway: WebhookEvent["gateway"] = "bKash") => {
+    // Fire 6 anomaly events in quick succession to overflow the budget
+    const LIMIT = 5;
+    for (let i = 0; i < LIMIT + 1; i++) {
+      setTimeout(() => {
+        const ev = makeEvent("outage", tickRef.current++, gateway, "with");
+        const key = ev.idempotencyKey!;
+        seenKeysRef.current.add(key);
+
+        const newCount = (retryCountsRef.current[gateway] ?? 0) + 1;
+        retryCountsRef.current[gateway] = newCount;
+        const willPause = newCount >= LIMIT;
+
+        setRetryBudgets(prev => prev.map(b =>
+          b.gateway === gateway ? { ...b, count: newCount, paused: willPause } : b
+        ));
+
+        if (willPause) {
+          setPausedMerchants(prev => prev.includes(gateway) ? prev : [...prev, gateway]);
+        }
+
+        setEvents(prev => [ev, ...prev.slice(0, 49)]);
+        setTotalWebhooks(p => p + 1);
+        setRecovered(p => p + 1);
+      }, i * 300);
+    }
+  }, []);
+
+  const unblockMerchant = useCallback((gateway: string) => {
+    setPausedMerchants(prev => prev.filter(m => m !== gateway));
+    retryCountsRef.current[gateway] = 0;
+    setRetryBudgets(prev => prev.map(b =>
+      b.gateway === gateway ? { ...b, count: 0, paused: false } : b
+    ));
+  }, []);
 
   const replayEvent = useCallback((id: string) => {
     setEvents(prev => prev.map(e => e.id === id ? { ...e, status: "recovered", retries: e.retries + 1, latencyMs: Math.floor(Math.random() * 80 + 20) } : e));
@@ -196,7 +352,13 @@ export function ClusterProvider({ children }: { children: React.ReactNode }) {
   }, [tps, faultMode, aiMode, inferenceMode]);
 
   return (
-    <Ctx.Provider value={{ tps, setTps, faultMode, setFaultMode, aiMode, setAiMode, inferenceMode, totalWebhooks, recovered, savings, lastEvent, events, nodes, sendWebhook, replayEvent, clearLastEvent, markEventShown, dismissedIds }}>
+    <Ctx.Provider value={{
+      tps, setTps, faultMode, setFaultMode, aiMode, setAiMode, inferenceMode,
+      totalWebhooks, recovered, savings, lastEvent, events, nodes,
+      sendWebhook, replayEvent, clearLastEvent, markEventShown, dismissedIds,
+      duplicatesBlocked, pausedMerchants, matchingReport, retryBudgets,
+      triggerDuplicate, triggerRetryStorm, unblockMerchant,
+    }}>
       {children}
     </Ctx.Provider>
   );
